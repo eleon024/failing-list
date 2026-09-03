@@ -50,6 +50,30 @@ header p{margin:2px 0 0;color:var(--soft);font-size:14px;max-width:60ch}
 #drop.slim .big{font-size:15px;font-weight:500}
 #drop.slim .sub,#drop.slim .priv{display:none}
 
+/* ---------- staged file queue ---------- */
+#queue{display:none;margin-top:14px;background:var(--card);border:1px solid var(--rule);
+  border-radius:4px}
+#queue.on{display:block}
+#queue header{display:flex;align-items:center;gap:10px;padding:11px 14px;
+  border-bottom:1px solid var(--rule);margin:0}
+#queue header .n{font-weight:600;font-size:14px;flex:1}
+#qlist{margin:0;padding:0;list-style:none;max-height:230px;overflow:auto}
+#qlist li{display:flex;align-items:center;gap:10px;padding:7px 14px;font-size:14px;
+  border-bottom:1px solid var(--rule-soft)}
+#qlist li:last-child{border-bottom:none}
+#qlist .fn{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#qlist .sz{color:var(--soft);font-size:13px}
+.x{border:none;background:none;color:var(--soft);cursor:pointer;padding:2px 6px;
+  border-radius:3px;font-size:16px;line-height:1}
+.x:hover{color:var(--mark);background:var(--mark-bg)}
+.link{border:none;background:none;color:var(--soft);cursor:pointer;
+  text-decoration:underline;text-underline-offset:3px;padding:4px;font-size:14px}
+.link:hover{color:var(--mark)}
+#run{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600;
+  padding:9px 18px}
+#run:hover{background:#000}
+#run:disabled{opacity:.5;cursor:default}
+
 /* ---------- controls ---------- */
 #controls{display:none;margin:22px 0 6px}
 #controls.on{display:block}
@@ -111,6 +135,17 @@ tr.fail td.grade{color:var(--mark);background:var(--mark-bg)}
   <div class="priv">Everything is read <u>on this computer</u>. No files are uploaded anywhere.</div>
 </div>
 <input type="file" id="picker" accept="application/pdf" multiple hidden>
+<input type="file" id="folder" webkitdirectory directory multiple hidden>
+
+<div id="queue">
+  <header>
+    <span class="n" id="qn"></span>
+    <button class="link" id="addFolder">Add a folder</button>
+    <button class="link" id="clear">Clear all</button>
+    <button id="run">Run report</button>
+  </header>
+  <ul id="qlist"></ul>
+</div>
 
 <div id="controls">
   <div class="count" id="count"></div>
@@ -148,6 +183,13 @@ tr.fail td.grade{color:var(--mark);background:var(--mark-bg)}
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+/* ---- elements first: everything below references these ---- */
+const $=id=>document.getElementById(id);
+const drop=$("drop"),picker=$("picker"),folder=$("folder"),controls=$("controls"),
+      count=$("count"),term=$("term"),thresh=$("thresh"),q=$("q"),tbl=$("tbl"),
+      body=$("body"),empty=$("empty"),log=$("log"),dlx=$("dlx"),dlc=$("dlc"),
+      queue=$("queue"),qlist=$("qlist"),qn=$("qn"),runBtn=$("run");
 
 /* ================= parsing ================= */
 const RE_STUDENT = /^Individual Student Report\s+(.+?)\s*$/;
@@ -264,22 +306,56 @@ function render(){
 }
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
-/* ================= loading ================= */
-async function load(files){
-  const pdfs=[...files].filter(f=>/\.pdf$/i.test(f.name));
-  if(!pdfs.length){log.innerHTML='<span class="err">No PDFs in that selection.</span>';return;}
-  pdfs.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+/* ================= file queue ================= */
+let QUEUE=[];
+const keyOf=f=>f.name+"|"+f.size+"|"+f.lastModified;
 
-  drop.classList.add("slim");
-  drop.querySelector(".big").textContent="Add more PDFs";
+function stage(files){
+  const pdfs=[...files].filter(f=>/\.pdf$/i.test(f.name));
+  const skipped=[...files].length-pdfs.length;
+  const have=new Set(QUEUE.map(keyOf));
+  let added=0;
+  for(const f of pdfs){ if(!have.has(keyOf(f))){ QUEUE.push(f); have.add(keyOf(f)); added++; } }
+
+  // Student names carry across page and file boundaries, so read in name order.
+  QUEUE.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  renderQueue();
+
+  const notes=[];
+  if(!added && pdfs.length) notes.push("Those files are already in the list.");
+  if(skipped) notes.push(`Ignored ${skipped} non-PDF file${skipped===1?"":"s"}.`);
+  if(!pdfs.length && !QUEUE.length) notes.push("No PDFs in that selection.");
+  log.innerHTML=notes.length?`<span class="err">${esc(notes.join(" "))}</span>`:"";
+}
+
+function renderQueue(){
+  queue.classList.toggle("on",QUEUE.length>0);
+  const mb=QUEUE.reduce((t,f)=>t+f.size,0)/1048576;
+  qn.textContent=`${QUEUE.length} file${QUEUE.length===1?"":"s"} ready · ${mb.toFixed(1)} MB`;
+  runBtn.disabled=!QUEUE.length;
+  qlist.innerHTML=QUEUE.map((f,i)=>`<li>
+    <span class="fn">${esc(f.name)}</span>
+    <span class="sz">${(f.size/1024).toFixed(0)} KB</span>
+    <button class="x" data-i="${i}" aria-label="Remove ${esc(f.name)}">&times;</button></li>`).join("");
+  if(QUEUE.length){
+    drop.classList.add("slim");
+    drop.querySelector(".big").textContent="Add more PDFs";
+  }
+}
+
+/* ================= run ================= */
+async function run(){
+  if(!QUEUE.length) return;
+  runBtn.disabled=true; runBtn.textContent="Reading…";
   ALL=[]; const state={student:null,ctx:null}; const problems=[];
 
-  for(let i=0;i<pdfs.length;i++){
-    log.textContent=`Reading ${i+1} of ${pdfs.length}: ${pdfs[i].name}`;
+  for(let i=0;i<QUEUE.length;i++){
+    log.textContent=`Reading ${i+1} of ${QUEUE.length}: ${QUEUE[i].name}`;
+    await new Promise(r=>setTimeout(r));            // let the progress line paint
     try{
-      const n=await parseFile(pdfs[i],state,ALL);
-      if(n===0) problems.push(`${pdfs[i].name} — no grade rows found`);
-    }catch(e){ problems.push(`${pdfs[i].name} — ${e.message}`); }
+      const n=await parseFile(QUEUE[i],state,ALL);
+      if(n===0) problems.push(`${QUEUE[i].name} — no grade rows found`);
+    }catch(e){ problems.push(`${QUEUE[i].name} — ${e.message}`); }
   }
 
   const terms=[...new Set(ALL.map(r=>r.term))].sort();
@@ -288,10 +364,14 @@ async function load(files){
     terms.map(t=>`<option value="${t}">${t}</option>`).join("");
 
   controls.classList.add("on");
+  const students=new Set(ALL.map(r=>r.student)).size;
   log.innerHTML = problems.length
-    ? `<span class="err">Skipped ${problems.length} file(s):</span>\n`+problems.map(esc).join("\n")+
+    ? `Read ${ALL.length} grade rows for ${students} students. `+
+      `<span class="err">Skipped ${problems.length} file(s):</span>\n`+problems.map(esc).join("\n")+
       `\n\nIf a file was scanned as an image, there is no text to read — re-export it from the gradebook.`
-    : `Read ${pdfs.length} file(s), ${ALL.length} grade rows.`;
+    : `Read ${QUEUE.length} file(s) · ${ALL.length} grade rows · ${students} students.`;
+
+  runBtn.disabled=false; runBtn.textContent="Run report";
   render();
 }
 
@@ -337,17 +417,24 @@ dlc.onclick=()=>{
 };
 
 /* ================= wiring ================= */
-const $=id=>document.getElementById(id);
-const drop=$("drop"),picker=$("picker"),controls=$("controls"),count=$("count"),
-      term=$("term"),thresh=$("thresh"),q=$("q"),tbl=$("tbl"),body=$("body"),
-      empty=$("empty"),log=$("log"),dlx=$("dlx"),dlc=$("dlc");
-
 drop.onclick=()=>picker.click();
 drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();picker.click();}};
-picker.onchange=e=>load(e.target.files);
+picker.onchange=e=>{stage(e.target.files);e.target.value="";};
+folder.onchange=e=>{stage(e.target.files);e.target.value="";};
+$("addFolder").onclick=()=>folder.click();
+$("clear").onclick=()=>{QUEUE=[];renderQueue();log.textContent="";};
+qlist.onclick=e=>{
+  const btn=e.target.closest(".x"); if(!btn) return;
+  QUEUE.splice(+btn.dataset.i,1); renderQueue();
+};
+runBtn.onclick=run;
+
 drop.ondragover=e=>{e.preventDefault();drop.classList.add("over");};
 drop.ondragleave=()=>drop.classList.remove("over");
-drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");load(e.dataTransfer.files);};
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");stage(e.dataTransfer.files);};
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("drop",e=>e.preventDefault());
+
 [thresh,q,term].forEach(el=>el.oninput=render);
 document.querySelectorAll("th").forEach(th=>th.onclick=()=>{
   const k=th.dataset.k;
