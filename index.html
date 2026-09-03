@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Failing list — grade report reader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Libre+Franklin:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --page:#EBEFF2; --card:#fff; --ink:#16212B; --soft:#5C6B78;
+  --rule:#C9D6DF; --rule-soft:#E4EBF0; --mark:#B3261E; --mark-bg:#FBEDEC;
+  --focus:#2C5C8A;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--page); color:var(--ink);
+  font-family:"Libre Franklin",system-ui,-apple-system,sans-serif;
+  font-size:15px; line-height:1.55;
+  font-variant-numeric:tabular-nums;
+  padding:32px 20px 72px;
+}
+.wrap{max-width:940px;margin:0 auto}
+
+header{margin-bottom:26px}
+h1{font-size:19px;font-weight:700;letter-spacing:-.01em;margin:0}
+header p{margin:2px 0 0;color:var(--soft);font-size:14px;max-width:60ch}
+
+/* ---------- dropzone: the hero ---------- */
+#drop{
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-radius:4px;
+  padding:44px 28px;
+  text-align:center;
+  cursor:pointer;
+  background-image:repeating-linear-gradient(
+    to bottom, transparent, transparent 33px, var(--rule-soft) 33px, var(--rule-soft) 34px);
+  transition:border-color .15s, background-color .15s;
+}
+#drop:hover,#drop:focus-visible{border-color:var(--focus);outline:none}
+#drop.over{border-color:var(--focus);background-color:#F4F8FB}
+#drop .big{font-size:20px;font-weight:600;letter-spacing:-.01em}
+#drop .sub{color:var(--soft);font-size:14px;margin-top:6px}
+#drop .priv{color:var(--soft);font-size:13px;margin-top:18px}
+#drop u{text-decoration-color:var(--rule);text-underline-offset:3px}
+#drop.slim{padding:14px 18px;text-align:left;background-image:none}
+#drop.slim .big{font-size:15px;font-weight:500}
+#drop.slim .sub,#drop.slim .priv{display:none}
+
+/* ---------- controls ---------- */
+#controls{display:none;margin:22px 0 6px}
+#controls.on{display:block}
+.count{font-size:17px;font-weight:600;margin-bottom:14px}
+.count b{color:var(--mark)}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.field{display:flex;flex-direction:column;gap:4px}
+.field span{font-size:12px;color:var(--soft);font-weight:500}
+input,select,button{
+  font:inherit;font-variant-numeric:tabular-nums;
+  border:1px solid var(--rule); background:var(--card); color:var(--ink);
+  border-radius:3px; padding:7px 10px;
+}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
+#q{flex:1;min-width:180px}
+button{cursor:pointer;font-weight:500}
+button:hover{border-color:var(--focus)}
+.spacer{flex:1}
+
+/* ---------- roster ---------- */
+table{width:100%;border-collapse:collapse;margin-top:16px;background:var(--card);
+  border:1px solid var(--rule);border-radius:4px}
+th{
+  text-align:left;font-size:13px;font-weight:600;color:var(--soft);
+  padding:10px 12px;border-bottom:1px solid var(--rule);cursor:pointer;
+  white-space:nowrap;user-select:none;
+}
+th:hover{color:var(--ink)}
+td{padding:9px 12px;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+tr:last-child td{border-bottom:none}
+td.grade{font-weight:600;text-align:right;width:1%}
+tr.fail td:first-child{box-shadow:inset 3px 0 0 var(--mark)}
+tr.fail td.grade{color:var(--mark);background:var(--mark-bg)}
+.name{font-weight:600}
+.dim{color:var(--soft)}
+#empty{padding:30px 12px;text-align:center;color:var(--soft)}
+#log{margin-top:14px;font-size:13px;color:var(--soft);white-space:pre-wrap}
+#log .err{color:var(--mark)}
+@media(max-width:620px){
+  body{padding:20px 12px 60px}
+  td,th{padding:8px 8px;font-size:14px}
+  .hideSm{display:none}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Failing list</h1>
+  <p>Reads Individual Student Report PDFs and pulls out every grade below your cutoff,
+     with the class and teacher attached.</p>
+</header>
+
+<div id="drop" tabindex="0" role="button" aria-label="Choose report PDFs">
+  <div class="big">Drop report PDFs here</div>
+  <div class="sub">or click to choose files — a whole folder at once is fine</div>
+  <div class="priv">Everything is read <u>on this computer</u>. No files are uploaded anywhere.</div>
+</div>
+<input type="file" id="picker" accept="application/pdf" multiple hidden>
+
+<div id="controls">
+  <div class="count" id="count"></div>
+  <div class="bar">
+    <label class="field"><span>Failing at or below</span>
+      <input type="number" id="thresh" value="79" min="0" max="100" style="width:88px"></label>
+    <label class="field"><span>Term</span>
+      <select id="term"><option value="__latest">Latest per class</option></select></label>
+    <label class="field" style="flex:1;min-width:180px"><span>Search</span>
+      <input id="q" placeholder="Student, class, or teacher"></label>
+    <div class="spacer"></div>
+    <button id="dlx">Download Excel</button>
+    <button id="dlc">Download CSV</button>
+  </div>
+</div>
+
+<table id="tbl" hidden>
+  <thead><tr>
+    <th data-k="student">Student</th>
+    <th data-k="class_name">Class</th>
+    <th data-k="period" class="hideSm">Per</th>
+    <th data-k="teacher">Teacher</th>
+    <th data-k="term" class="hideSm">Term</th>
+    <th data-k="grade" class="grade">Grade</th>
+  </tr></thead>
+  <tbody id="body"></tbody>
+</table>
+<div id="empty" hidden></div>
+<div id="log"></div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+/* ================= parsing ================= */
+const RE_STUDENT = /^Individual Student Report\s+(.+?)\s*$/;
+const RE_CLASS   = /^Class:\s*(.+?)\s*\(\s*Semester\s*(\d+)\s*\)\s*Teacher:\s*(.+?)\s*$/;
+const RE_PERIOD  = /^(\d{1,2}\([A-Z]\)|\d{1,2})\s+(.+)$/;
+const RE_TERM    = /^([A-Z]{1,3}\d{0,2})\s+(-?\d+(?:\.\d+)?|[A-Z]{1,3})\s+(-?\d+(?:\.\d+)?)%(.*)$/;
+const RE_FOOTER  = /^\d{1,2}\/\d{1,2}\/\d{2,4}\s+\d+\s*$/;
+const SKIP = new Set(["final grade","semester grade","current grade"]);
+
+/* pdf.js returns positioned glyph runs, sometimes one per character.
+   Rebuild visual lines: bucket by y, then join by x-gap. */
+function itemsToLines(items){
+  const rows=[];
+  for(const it of items){
+    if(!it.str) continue;
+    const y=it.transform[5], h=Math.abs(it.transform[3])||10;
+    let row=rows.find(r=>Math.abs(r.y-y)<h*0.5);
+    if(!row){row={y,parts:[]};rows.push(row);}
+    row.parts.push({x:it.transform[4],w:it.width||0,h,s:it.str});
+  }
+  return rows.sort((a,b)=>b.y-a.y).map(({parts})=>{
+    parts.sort((a,b)=>a.x-b.x);
+    let out="",end=null;
+    for(const p of parts){
+      if(end!==null && p.x-end > p.h*0.18) out+=" ";
+      out+=p.s; end=p.x+p.w;
+    }
+    return out.replace(/\s+/g," ").trim();
+  }).filter(Boolean);
+}
+
+const num=v=>{const n=parseFloat(v);return isNaN(n)?null:n;};
+
+/* Only page 1 of a student's report carries the name header, so the current
+   student carries forward across pages — and across files, in case each page
+   was saved separately. */
+async function parseFile(file, state, rows){
+  const buf=await file.arrayBuffer();
+  const doc=await pdfjsLib.getDocument({data:new Uint8Array(buf)}).promise;
+  let n=0;
+  for(let i=1;i<=doc.numPages;i++){
+    const lines=itemsToLines((await (await doc.getPage(i)).getTextContent()).items);
+    for(const line of lines){
+      if(RE_FOOTER.test(line)) continue;
+      if(SKIP.has(line.toLowerCase())) continue;
+      if(line.startsWith("Rpt.")||line.startsWith("Rpt ")) continue;
+
+      let m=line.match(RE_STUDENT);
+      if(m){state.student=m[1].trim();state.ctx=null;continue;}
+
+      m=line.match(RE_CLASS);
+      if(m){
+        const pm=m[1].match(RE_PERIOD);
+        state.ctx={period:pm?pm[1]:"",class_name:(pm?pm[2]:m[1]).trim(),
+                   semester:m[2],teacher:m[3].trim()};
+        continue;
+      }
+
+      m=line.match(RE_TERM);
+      if(m && state.ctx){
+        const tail=m[4].trim().split(/\s+/).filter(Boolean);
+        rows.push({student:state.student||"UNKNOWN",...state.ctx,
+          term:m[1],grade:num(m[2]),grade_raw:m[2],percent:num(m[3]),
+          absent:num(tail[0]),tardy:num(tail[1]),missing:num(tail[2]),
+          source_file:file.name,page:i});
+        n++;
+      }
+    }
+  }
+  return n;
+}
+
+/* ================= state ================= */
+let ALL=[], VIEW=[], sortKey="student", sortAsc=true;
+
+function scoped(){
+  const t=term.value;
+  if(t==="__all") return ALL;
+  if(t!=="__latest") return ALL.filter(r=>r.term===t);
+  const seen=new Map();                       // last term row per student+class
+  for(const r of ALL) seen.set(r.student+"|"+r.period+"|"+r.class_name, r);
+  return [...seen.values()];
+}
+
+function render(){
+  const cut=parseFloat(thresh.value);
+  const needle=q.value.trim().toLowerCase();
+  VIEW=scoped().filter(r=>r.grade!==null && r.grade<=cut)
+    .filter(r=>!needle||`${r.student} ${r.class_name} ${r.teacher}`.toLowerCase().includes(needle));
+
+  VIEW.sort((a,b)=>{
+    const x=a[sortKey],y=b[sortKey];
+    const c=(typeof x==="number"&&typeof y==="number")?x-y:String(x).localeCompare(String(y));
+    return sortAsc?c:-c;
+  });
+
+  const students=new Set(VIEW.map(r=>r.student)).size;
+  const scanned=new Set(ALL.map(r=>r.student)).size;
+  count.innerHTML=`<b>${VIEW.length}</b> failing grade${VIEW.length===1?"":"s"} `+
+    `across ${students} of ${scanned} students`;
+
+  body.innerHTML=VIEW.map(r=>`<tr class="fail">
+    <td class="name">${esc(r.student)}</td>
+    <td>${esc(r.class_name)}</td>
+    <td class="dim hideSm">${esc(r.period)}</td>
+    <td>${esc(r.teacher)}</td>
+    <td class="dim hideSm">${esc(r.term)}</td>
+    <td class="grade">${esc(r.grade_raw)}</td></tr>`).join("");
+
+  tbl.hidden=VIEW.length===0;
+  empty.hidden=VIEW.length!==0;
+  empty.textContent = ALL.length===0 ? "" :
+    (needle ? "Nothing matches that search." : "No grades at or below the cutoff.");
+}
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ================= loading ================= */
+async function load(files){
+  const pdfs=[...files].filter(f=>/\.pdf$/i.test(f.name));
+  if(!pdfs.length){log.innerHTML='<span class="err">No PDFs in that selection.</span>';return;}
+  pdfs.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+
+  drop.classList.add("slim");
+  drop.querySelector(".big").textContent="Add more PDFs";
+  ALL=[]; const state={student:null,ctx:null}; const problems=[];
+
+  for(let i=0;i<pdfs.length;i++){
+    log.textContent=`Reading ${i+1} of ${pdfs.length}: ${pdfs[i].name}`;
+    try{
+      const n=await parseFile(pdfs[i],state,ALL);
+      if(n===0) problems.push(`${pdfs[i].name} — no grade rows found`);
+    }catch(e){ problems.push(`${pdfs[i].name} — ${e.message}`); }
+  }
+
+  const terms=[...new Set(ALL.map(r=>r.term))].sort();
+  term.innerHTML=`<option value="__latest">Latest per class</option>`+
+    `<option value="__all">All terms</option>`+
+    terms.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+  controls.classList.add("on");
+  log.innerHTML = problems.length
+    ? `<span class="err">Skipped ${problems.length} file(s):</span>\n`+problems.map(esc).join("\n")+
+      `\n\nIf a file was scanned as an image, there is no text to read — re-export it from the gradebook.`
+    : `Read ${pdfs.length} file(s), ${ALL.length} grade rows.`;
+  render();
+}
+
+/* ================= export ================= */
+const COLS=["student","period","class_name","teacher","term","grade","grade_raw",
+            "percent","absent","tardy","missing","source_file"];
+const pick=r=>Object.fromEntries(COLS.map(c=>[c,r[c]]));
+
+function summaries(){
+  const byS={},byT={};
+  for(const r of VIEW){
+    (byS[r.student]??={student:r.student,failing_classes:0,lowest_grade:999,classes:[]});
+    byS[r.student].failing_classes++;
+    byS[r.student].lowest_grade=Math.min(byS[r.student].lowest_grade,r.grade);
+    byS[r.student].classes.push(r.class_name);
+    const k=r.teacher+"|"+r.class_name;
+    (byT[k]??={teacher:r.teacher,class_name:r.class_name,failing_students:0});
+    byT[k].failing_students++;
+  }
+  return [
+    Object.values(byS).map(o=>({...o,classes:o.classes.join(", ")}))
+      .sort((a,b)=>b.failing_classes-a.failing_classes||a.lowest_grade-b.lowest_grade),
+    Object.values(byT).sort((a,b)=>b.failing_students-a.failing_students)
+  ];
+}
+const stamp=()=>new Date().toISOString().slice(0,10);
+
+dlx.onclick=()=>{
+  if(!VIEW.length) return;
+  const [byS,byT]=summaries(), wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(VIEW.map(pick)),"Failing");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(byS),"By Student");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(byT),"By Teacher");
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ALL.map(pick)),"All Grades");
+  XLSX.writeFile(wb,`failing-list-${stamp()}.xlsx`);
+};
+dlc.onclick=()=>{
+  if(!VIEW.length) return;
+  const csv=XLSX.utils.sheet_to_csv(XLSX.utils.json_to_sheet(VIEW.map(pick)));
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));
+  a.download=`failing-list-${stamp()}.csv`; a.click(); URL.revokeObjectURL(a.href);
+};
+
+/* ================= wiring ================= */
+const $=id=>document.getElementById(id);
+const drop=$("drop"),picker=$("picker"),controls=$("controls"),count=$("count"),
+      term=$("term"),thresh=$("thresh"),q=$("q"),tbl=$("tbl"),body=$("body"),
+      empty=$("empty"),log=$("log"),dlx=$("dlx"),dlc=$("dlc");
+
+drop.onclick=()=>picker.click();
+drop.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();picker.click();}};
+picker.onchange=e=>load(e.target.files);
+drop.ondragover=e=>{e.preventDefault();drop.classList.add("over");};
+drop.ondragleave=()=>drop.classList.remove("over");
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove("over");load(e.dataTransfer.files);};
+[thresh,q,term].forEach(el=>el.oninput=render);
+document.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+  const k=th.dataset.k;
+  sortAsc = k===sortKey ? !sortAsc : true; sortKey=k; render();
+});
+</script>
+</body>
+</html>
